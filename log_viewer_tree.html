@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAD Execution Logs View</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        .transaction {
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .transaction-title {
+            cursor: pointer;
+            padding: 10px;
+            background: #e0e0e0;
+            font-weight: bold;
+            border-bottom: 1px solid #ccc;
+        }
+        .transaction-content {
+            padding: 10px;
+            display: none;
+            white-space: pre-wrap;
+        }
+        .log-row {
+            align-items: flex-start;
+            padding: 8px 12px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.2s;
+            cursor: pointer;
+        }
+        .log-row.odd {
+            background: #f5f5f5;
+        }
+        .log-row.even {
+            background: #fff;
+        }
+        .log-row:hover {
+            background: #d0e7ff;
+        }
+        .log-row.selected {
+            background: #b0c4de;
+        }
+        .log-object {
+            margin-right: 24px;
+            margin-top: 20px;
+            padding: 4px 8px;
+            border-radius: 10px;
+            background: #f0f0f0;
+            font-family: monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .log-row-title {
+            font-weight: bold;
+            margin-right: 12px;
+        }
+        .highlight-error {
+            border: 2px solid #8B0000 !important;
+        }
+        .log-title-fn, .log-title-action {
+            font-weight: bold;
+        }
+        .log-title-idx, .log-title-var {
+            color: #888;
+            font-weight: lighter;
+        }
+        .log-title-sep {
+            font-weight: bold;
+            color: #aaa;
+        }
+        .log-title-info {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            margin-left: 0.5em;
+            border-radius: 50%;
+            vertical-align: middle;
+            font-size: 1em;
+            text-align: center;
+            line-height: 1em;
+        }
+        .log-title-info-info {
+            background: #90ee90;
+            color: #2e7d32;
+        }
+        .log-title-info-warn {
+            background: #ffa500;
+            color: #fff;
+        }
+        .log-title-info-error {
+            background: #e53935;
+            color: #fff;
+        }
+        .log-title-msgval {
+            color: #888;
+            font-size: 0.9em;
+            font-weight: lighter;
+            margin-left: 0.5em;
+        }
+        .journal-label {
+            font-weight: bolder;
+        }
+        .journal-value {
+            font-weight: bolder;
+        }
+        .workqueue-label {
+            color: #888;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>PAD Execution Logs View - Finanace Import Journal</h1>
+    <input type="file" id="logFileInput" accept=".log,.txt,.json" />
+    <div class="row sectionBlockLayout" style="min-height:15px"></div>
+    <div id="dashboard" style="display:none; text-align:center; margin-bottom:20px;"></div>
+    <div id="transactionsContainer"></div>
+
+    <script>
+        function parseTransactions(logText) {
+            const lines = logText.split(/\r?\n/);
+            const transactions = [];
+            let current = null;
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.startsWith('{"name":"Process work queue items"')) {
+                    if (current) transactions.push(current);
+                    current = { lines: [line], displayText: null };
+                    try {
+                        const obj = JSON.parse(line);
+                        // Get outputs.workQueueItem.value for display text
+                        current.displayText =
+                            obj?.outputs?.workQueueItem?.value || 'Unknown Value';
+                    } catch (e) {
+                        current.displayText = 'Unknown Value';
+                    }
+                } else if (current) {
+                    current.lines.push(line);
+                }
+            }
+            if (current) transactions.push(current);
+            return transactions;
+        }
+
+        function renderTransactions(transactions) {
+            const container = document.getElementById('transactionsContainer');
+            container.innerHTML = '';
+            transactions.forEach((txn, idx) => {
+                const txnDiv = document.createElement('div');
+                txnDiv.className = 'transaction';
+
+                // Use getJournalNumber to extract Journal Number for this transaction
+                let journalNumber = getJournalNumber(
+                    txn.lines.map(line => {
+                        try {
+                            if (line.trim().startsWith('[')) {
+                                const arr = JSON.parse(line);
+                                return { object: arr[0] };
+                            } else {
+                                return { object: JSON.parse(line) };
+                            }
+                        } catch (e) {
+                            return { object: {} };
+                        }
+                    })
+                );
+
+                // Check if any log entry in this transaction has an 'error' property
+                let hasError = txn.lines.some(line => {
+                    try {
+                        if (line.trim().startsWith('[')) {
+                            const arr = JSON.parse(line);
+                            return arr.some(obj => obj && obj.error);
+                        } else {
+                            const obj = JSON.parse(line);
+                            return obj && obj.error;
+                        }
+                    } catch (e) {
+                        return false;
+                    }
+                });
+
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'transaction-title' + (hasError ? ' highlight-error' : '');
+                titleDiv.innerHTML =
+                    (journalNumber
+                        ? `<span class='journal-label'>Journal Number:</span> <span class='journal-value'>${journalNumber}</span>`
+                        : '') +
+                    (txn.displayText && txn.displayText !== 'Unknown Value'
+                        ? ` <span class='workqueue-label'>(WorkQueueItem: ${txn.displayText})</span>`
+                        : '');
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'transaction-content';
+                contentDiv.style.display = 'none';
+
+                // Lazy load transaction content on click
+                let transactionLoaded = false;
+                titleDiv.onclick = function() {
+                    if (!transactionLoaded) {
+                        // Only render transaction content on first click
+                        txn.lines.forEach((line, lineIdx) => {
+                            if (!line.trim()) return;
+                            // Lazy load log entry content on click
+                            let objects = null;
+                            let parsed = false;
+                            // Compose title from first object (if possible)
+                            let title = '';
+                            let fn = '', idxVal = '', actionName = '', varName = '';
+                            try {
+                                if (line.trim().startsWith('[')) {
+                                    objects = JSON.parse(line);
+                                } else {
+                                    objects = [JSON.parse(line)];
+                                }
+                                parsed = true;
+                            } catch (e) {
+                                objects = [line];
+                            }
+                            if (parsed && typeof objects[0] === 'object' && objects[0] !== null) {
+                                fn = objects[0].functionName || '';
+                                idxVal = (objects[0].index !== undefined) ? objects[0].index : '';
+                                actionName = objects[0].name || '';
+                                varName = objects[0]?.outputs?.variable?.variableName || '';
+                                let varValue = objects[0]?.outputs?.variable?.value;
+                                // Build the title in the requested format
+                                title = `<span class='log-title-fn'>${fn}</span>`;
+                                if (idxVal !== '') {
+                                    title += ` <span class='log-title-idx'>(${idxVal})</span>`;
+                                }
+                                title += ` <span class='log-title-sep'>|</span> <span class='log-title-action'>${actionName}</span>`;
+                                if (varName) {
+                                    let varDisplay = varName;
+                                    if (objects[0].name === 'Set variable' && varValue !== undefined) {
+                                        varDisplay = `${varName} = ${varValue}`;
+                                    }
+                                    title += ` <span class='log-title-var'>[${varDisplay}]</span>`;
+                                }
+                                // If name is 'Run subflow', append the value of inputs.function.value
+                                if (objects[0].name === 'Run subflow' && objects[0]?.inputs?.function?.value) {
+                                    title += ` <span class='log-title-sep'>|</span> <span class='log-title-var'>${objects[0].inputs.function.value}</span>`;
+                                }
+                                // Add info icon for log level if applicable
+                                if (objects[0].name === 'Log message' && objects[0].logLevel) {
+                                    let iconClass = '';
+                                    let iconChar = 'i';
+                                    if (objects[0].logLevel.toLowerCase() === 'error') {
+                                        iconClass = 'log-title-info log-title-info-error';
+                                        iconChar = '!';
+                                    } else if (objects[0].logLevel.toLowerCase() === 'warn') {
+                                        iconClass = 'log-title-info log-title-info-warn';
+                                        iconChar = '!';
+                                    } else if (objects[0].logLevel.toLowerCase() === 'info') {
+                                        iconClass = 'log-title-info log-title-info-info';
+                                        iconChar = 'i';
+                                    }
+                                    if (iconClass) {
+                                        title += ` <span class='${iconClass}'>${iconChar}</span>`;
+                                    }
+                                    // Add message value after info icon
+                                    if (objects[0]?.inputs?.message?.value) {
+                                        title += ` <span class='log-title-msgval'>[${objects[0].inputs.message.value}]</span>`;
+                                    }
+                                }
+                            } else {
+                                title = String(objects[0]);
+                            }
+                            // Create expandable row
+                            const rowDiv = document.createElement('div');
+                            rowDiv.className = 'log-row ' + (lineIdx % 2 === 0 ? 'even' : 'odd');
+                            if (parsed && objects.some(obj => obj && obj.error)) {
+                                rowDiv.classList.add('highlight-error');
+                            }
+                            rowDiv.tabIndex = 0;
+
+                            // Row title (click to expand/collapse)
+                            const rowTitleDiv = document.createElement('div');
+                            rowTitleDiv.className = 'log-row-title';
+                            rowTitleDiv.style.flex = '1';
+                            rowTitleDiv.style.cursor = 'pointer';
+                            rowTitleDiv.innerHTML = title;
+
+                            // Expandable content
+                            const rowContentDiv = document.createElement('div');
+                            rowContentDiv.style.display = 'none';
+                            rowContentDiv.style.width = '100%';
+
+                            // Lazy load log object on click
+                            let logLoaded = false;
+                            rowTitleDiv.onclick = function(e) {
+                                if (!logLoaded) {
+                                    objects.forEach(obj => {
+                                        // Only render the object, not the title again
+                                        const objDiv = document.createElement('div');
+                                        objDiv.className = 'log-object';
+                                        objDiv.style.marginLeft = '4em';
+                                        objDiv.style.whiteSpace = 'pre-wrap';
+                                        if (typeof obj === 'object' && obj !== null) {
+                                            objDiv.innerHTML = `<pre style='margin:0;'>${JSON.stringify(obj, null, 2)}</pre>`;
+                                        } else {
+                                            objDiv.textContent = obj;
+                                        }
+                                        rowContentDiv.appendChild(objDiv);
+                                    });
+                                    logLoaded = true;
+                                }
+                                // Only toggle the log-object content
+                                rowContentDiv.style.display = rowContentDiv.style.display === 'none' ? 'block' : 'none';
+                                rowDiv.classList.toggle('selected', rowContentDiv.style.display === 'block');
+                            };
+
+                            rowDiv.appendChild(rowTitleDiv);
+                            rowDiv.appendChild(rowContentDiv);
+                            contentDiv.appendChild(rowDiv);
+                        });
+                        transactionLoaded = true;
+                    }
+                    contentDiv.style.display = contentDiv.style.display === 'none' ? 'block' : 'none';
+                };
+
+                txnDiv.appendChild(titleDiv);
+                txnDiv.appendChild(contentDiv);
+                container.appendChild(txnDiv);
+            });
+        }
+
+        // Function to extract Journal Number from log entries
+        function getJournalNumber(logEntries) {
+          const journalEntry = logEntries.find(
+            entry =>
+              entry.object?.name === 'Set variable' &&
+              entry.object?.outputs?.variable?.variableName === 'in_SNOWTicketNo'
+          );
+          return journalEntry?.object?.outputs?.variable?.value || '';
+        }
+
+        function renderDashboard(transactions) {
+            const dashboard = document.getElementById('dashboard');
+            if (!transactions || transactions.length === 0) {
+                dashboard.style.display = 'none';
+                return;
+            }
+            const total = transactions.length;
+            let errorCount = 0;
+            transactions.forEach(txn => {
+                const hasError = txn.lines.some(line => {
+                    try {
+                        if (line.trim().startsWith('[')) {
+                            const arr = JSON.parse(line);
+                            return arr.some(obj => obj && obj.error);
+                        } else {
+                            const obj = JSON.parse(line);
+                            return obj && obj.error;
+                        }
+                    } catch (e) {
+                        return false;
+                    }
+                });
+                if (hasError) errorCount++;
+            });
+            dashboard.innerHTML = `<span style='font-weight:bold;'>Total Transactions:</span> ${total} &nbsp; | &nbsp; <span style='font-weight:bold;'>Error Transactions:</span> ${errorCount}`;
+            dashboard.style.display = 'block';
+        }
+
+        document.getElementById('logFileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                setTimeout(() => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const logContent = e.target.result;
+                        const transactions = parseTransactions(logContent);
+                        renderDashboard(transactions);
+                        renderTransactions(transactions);
+                    };
+                    reader.onerror = function() {
+                    };
+                    reader.readAsText(file);
+                }, 50); // 50ms delay
+            }
+        });
+    </script>
+</body>
+</html>
